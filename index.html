@@ -167,7 +167,11 @@
     <video id="cam" playsinline muted autoplay></video>
     <div class="reticle"><div class="laser"></div></div>
     <button class="torch" id="torchBtn" aria-pressed="false" aria-label="Toggle torch" hidden>🔦</button>
-    <div class="camnote" id="camnote">Fill the box with the barcode</div>
+    <div class="zoomwrap" id="zoomwrap" hidden>
+      <span aria-hidden="true">🔍</span>
+      <input id="zoom" type="range" aria-label="Zoom" min="1" max="5" step="0.1" value="1">
+    </div>
+    <div class="camnote" id="camnote">Fill the box with the barcode — hold ~15&nbsp;cm away</div>
   </div>
 
   <img id="shot" alt="Captured barcode photo" hidden>
