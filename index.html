@@ -79,14 +79,18 @@
   #camwrap{margin-top:12px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);background:#000;position:relative;aspect-ratio:3/4;max-height:64vh}
   #cam{width:100%;height:100%;object-fit:cover;display:block}
   #shot{width:100%;max-height:260px;object-fit:contain;background:#000;display:block}
-  .reticle{position:absolute;inset:34% 8%;border:2px solid rgba(255,255,255,.92);border-radius:12px;box-shadow:0 0 0 100vmax rgba(0,0,0,.30);pointer-events:none}
+  .reticle{position:absolute;inset:24% 5%;border:2px solid rgba(255,255,255,.92);border-radius:12px;box-shadow:0 0 0 100vmax rgba(0,0,0,.30);pointer-events:none}
   .reticle .laser{position:absolute;left:6px;right:6px;top:50%;height:2px;background:var(--low);box-shadow:0 0 10px var(--low);animation:scan 1.7s ease-in-out infinite}
-  @keyframes scan{0%,100%{transform:translateY(-38px)}50%{transform:translateY(38px)}}
+  @keyframes scan{0%,100%{transform:translateY(-46px)}50%{transform:translateY(46px)}}
   @media (prefers-reduced-motion:reduce){.reticle .laser{animation:none}}
   .camnote{position:absolute;left:10px;right:10px;bottom:12px;font-size:12px;color:#fff;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.85)}
   .torch{position:absolute;top:10px;right:10px;appearance:none;border:0;border-radius:999px;
     width:42px;height:42px;font-size:18px;background:rgba(0,0,0,.5);color:#fff;cursor:pointer;backdrop-filter:blur(4px)}
   .torch[aria-pressed="true"]{background:var(--mid);color:#111}
+  .zoomwrap{position:absolute;left:12px;right:12px;bottom:40px;display:flex;align-items:center;gap:10px;
+    background:rgba(0,0,0,.45);border-radius:999px;padding:7px 14px;backdrop-filter:blur(4px)}
+  .zoomwrap span{font-size:14px}
+  .zoomwrap input[type=range]{flex:1;accent-color:var(--accent);height:22px}
 
   .row2{display:flex;gap:8px;margin-top:10px}
   .row2 .btn{flex:1}
@@ -339,14 +343,28 @@
   // ---------- live scan ----------
   var scanBtn=document.getElementById('scanBtn'), scanLbl=document.getElementById('scanLbl'),
       camwrap=document.getElementById('camwrap'), cam=document.getElementById('cam'),
-      torchBtn=document.getElementById('torchBtn'), camnote=document.getElementById('camnote');
-  var scanning=false, rafId=null, zxReader=null, detector=null, track=null, lastCode=null, lastAt=0, torchOn=false;
+      torchBtn=document.getElementById('torchBtn'), camnote=document.getElementById('camnote'),
+      zoomwrap=document.getElementById('zoomwrap'), zoomInput=document.getElementById('zoom');
+  var scanning=false, gotOne=false, torchOn=false, track=null,
+      detector=null, useNative=false, engine='none', zxReader=null,
+      mfReader=null, tickTimer=null, decoding=false,
+      roi=document.createElement('canvas'), roiCtx=roi.getContext('2d',{willReadFrequently:true});
 
-  function onLiveCode(code){
-    var now=Date.now();
-    if(code===lastCode && now-lastAt<2500) return;
-    lastCode=code; lastAt=now;
-    showItem(code);
+  function haveLowLevelZX(){
+    return Z && Z.MultiFormatReader && Z.HTMLCanvasElementLuminanceSource && Z.BinaryBitmap && Z.HybridBinarizer;
+  }
+  function buildMF(){
+    try{ mfReader=new Z.MultiFormatReader(); mfReader.setHints(zxHints()); }catch(e){ mfReader=null; }
+  }
+  function decodeZXCanvas(canvas){
+    if(!mfReader) return null;
+    try{
+      var lum=new Z.HTMLCanvasElementLuminanceSource(canvas);
+      var bmp=new Z.BinaryBitmap(new Z.HybridBinarizer(lum));
+      var r=mfReader.decode(bmp);
+      return r?r.getText():null;
+    }catch(e){ return null; }
+    finally{ try{ mfReader.reset(); }catch(e){} }
   }
 
   async function startScan(){
@@ -354,65 +372,97 @@
       setStatus('This browser can’t open a live camera. Use <b>Snap a photo</b> or type the number.','warn'); return;
     }
     setStatus('Starting camera…','info');
-    var stream;
-    try{
-      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-    }catch(e){
-      setStatus('Camera blocked ('+(e&&e.name||'error')+'). Tap the padlock in the address bar → allow Camera, then reload. Or use <b>Snap a photo</b> / type the number.','warn');
-      return;
+    var stream=null;
+    var hi={audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30}}};
+    try{ stream=await navigator.mediaDevices.getUserMedia(hi); }
+    catch(e){
+      try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); }
+      catch(e2){
+        setStatus('Camera blocked ('+(e2&&e2.name||'error')+'). Tap the padlock in the address bar → allow Camera, then reload. Or use <b>Snap a photo</b>.','warn');
+        return;
+      }
     }
     cam.srcObject=stream; try{ await cam.play(); }catch(e){}
     track=stream.getVideoTracks()[0];
-    scanning=true; camwrap.hidden=false;
+    try{ await track.applyConstraints({advanced:[{focusMode:'continuous'}]}); }catch(e){}
+    scanning=true; gotOne=false; camwrap.hidden=false;
     document.getElementById('shot').hidden=true;
     scanBtn.classList.add('stop'); scanLbl.textContent='Stop scanning';
-    setStatus('');
-    setupTorch();
+    setStatus(''); setupTorch(); setupZoom();
 
-    var useNative=false;
+    useNative=false; detector=null; engine='none';
     if('BarcodeDetector' in window){
       try{
-        var supported=await window.BarcodeDetector.getSupportedFormats();
-        var fmts=FORMATS.filter(function(f){ return supported.indexOf(f)>-1; });
-        if(fmts.length){ detector=new window.BarcodeDetector({formats:fmts}); useNative=true; }
-      }catch(e){ useNative=false; }
+        var sup=await window.BarcodeDetector.getSupportedFormats();
+        var f=FORMATS.filter(function(x){ return sup.indexOf(x)>-1; });
+        if(f.length){ detector=new window.BarcodeDetector({formats:f}); useNative=true; engine='native'; }
+      }catch(e){}
     }
-    if(useNative){ camnote.textContent='Fill the box with the barcode'; nativeLoop(); }
-    else if(Z){ camnote.textContent='Fill the box with the barcode'; zxingLoop(stream); }
-    else { setStatus('Scanner engine unavailable — use Snap a photo or type the number.','warn'); }
+    if(!useNative){
+      if(haveLowLevelZX()){ buildMF(); engine='zxcanvas'; }
+      else if(Z){ engine='zxstream'; startZXStream(stream); }
+      else { setStatus('Scanner engine unavailable — use Snap a photo or type the number.','warn'); }
+    }
+    if(engine==='native'||engine==='zxcanvas'){ decoding=false; tick(); }
   }
 
-  async function nativeLoop(){
-    if(!scanning) return;
-    try{
-      var codes=await detector.detect(cam);
-      if(codes && codes.length){ onLiveCode(codes[0].rawValue); }
-    }catch(e){}
-    rafId=requestAnimationFrame(nativeLoop);
+  function cropROI(){
+    var vw=cam.videoWidth, vh=cam.videoHeight;
+    if(!vw||!vh) return null;
+    var cw=Math.round(vw*0.92), ch=Math.round(vh*0.72);
+    var sx=Math.round((vw-cw)/2), sy=Math.round((vh-ch)/2);
+    roi.width=cw; roi.height=ch;
+    roiCtx.drawImage(cam, sx,sy,cw,ch, 0,0,cw,ch);
+    return roi;
   }
 
-  function zxingLoop(stream){
+  async function tick(){
+    if(!scanning || gotOne) return;
+    if(!decoding){
+      decoding=true;
+      try{
+        var canvas=cropROI(), code=null;
+        if(canvas){
+          if(useNative){
+            var res=await detector.detect(canvas);
+            if(res && res.length) code=res[0].rawValue;
+          } else {
+            code=decodeZXCanvas(canvas);
+          }
+        }
+        if(code){ decoding=false; onHit(code); return; }
+      }catch(e){}
+      decoding=false;
+    }
+    tickTimer=setTimeout(tick, useNative?90:60);
+  }
+
+  function startZXStream(stream){
     try{
-      zxReader=new Z.BrowserMultiFormatReader(zxHints(),350);
-      zxReader.decodeFromStream(stream, cam, function(result,err){
-        if(result && scanning) onLiveCode(result.getText());
+      zxReader=new Z.BrowserMultiFormatReader(zxHints(),120);
+      zxReader.decodeFromStream(stream, cam, function(result){
+        if(result && scanning && !gotOne) onHit(result.getText());
       }).catch(function(){
-        // older API fallback
-        zxReader.decodeFromConstraints({video:{facingMode:{ideal:'environment'}}},cam,function(result){
-          if(result && scanning) onLiveCode(result.getText());
-        });
+        try{
+          zxReader.decodeFromConstraints({video:{facingMode:{ideal:'environment'}}},cam,function(r){
+            if(r && scanning && !gotOne) onHit(r.getText());
+          });
+        }catch(e){}
       });
-    }catch(e){
-      setStatus('Live decoder failed to start — use Snap a photo or type the number.','warn');
-    }
+    }catch(e){ setStatus('Live decoder failed — use Snap a photo or type the number.','warn'); }
+  }
+
+  function onHit(code){
+    if(gotOne) return; gotOne=true;
+    stopScan();     // auto-close the scanner on a successful read
+    showItem(code);
   }
 
   function setupTorch(){
     torchOn=false; torchBtn.setAttribute('aria-pressed','false');
     try{
       var caps=track.getCapabilities?track.getCapabilities():{};
-      if(caps && caps.torch){ torchBtn.hidden=false; }
-      else { torchBtn.hidden=true; }
+      torchBtn.hidden=!(caps && caps.torch);
     }catch(e){ torchBtn.hidden=true; }
   }
   torchBtn.addEventListener('click',async function(){
@@ -422,14 +472,37 @@
     catch(e){ torchOn=false; torchBtn.setAttribute('aria-pressed','false'); }
   });
 
+  function setupZoom(){
+    try{
+      var caps=track.getCapabilities?track.getCapabilities():{};
+      if(caps && caps.zoom && caps.zoom.max>caps.zoom.min){
+        zoomInput.min=caps.zoom.min;
+        zoomInput.max=Math.min(caps.zoom.max, caps.zoom.min+6);
+        zoomInput.step=caps.zoom.step||0.1;
+        var s=track.getSettings?track.getSettings():{};
+        zoomInput.value=s.zoom||caps.zoom.min;
+        zoomwrap.hidden=false;
+      } else { zoomwrap.hidden=true; }
+    }catch(e){ zoomwrap.hidden=true; }
+  }
+  zoomInput.addEventListener('input',async function(){
+    if(!track) return;
+    try{ await track.applyConstraints({advanced:[{zoom:parseFloat(zoomInput.value)}]}); }catch(e){}
+  });
+  // tap to refocus (best effort)
+  cam.addEventListener('click',async function(){
+    if(!track) return;
+    try{ await track.applyConstraints({advanced:[{focusMode:'continuous'}]}); }catch(e){}
+  });
+
   function stopScan(){
     scanning=false;
-    if(rafId) cancelAnimationFrame(rafId);
+    if(tickTimer){ clearTimeout(tickTimer); tickTimer=null; }
     try{ if(zxReader) zxReader.reset(); }catch(e){}
     zxReader=null;
     try{ if(cam.srcObject){ cam.srcObject.getTracks().forEach(function(t){ t.stop(); }); } }catch(e){}
     cam.srcObject=null; track=null;
-    camwrap.hidden=true; torchBtn.hidden=true;
+    camwrap.hidden=true; torchBtn.hidden=true; zoomwrap.hidden=true;
     scanBtn.classList.remove('stop'); scanLbl.textContent='Start scanning';
   }
   scanBtn.addEventListener('click',function(){ scanning?stopScan():startScan(); });
