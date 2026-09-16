@@ -115,6 +115,8 @@
   .chip{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
   .chip.book{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
   .chip.disc{color:var(--mid);border-color:color-mix(in srgb,var(--mid) 40%,var(--line))}
+  .chip.game{color:var(--good);border-color:color-mix(in srgb,var(--good) 40%,var(--line))}
+  .chip.music{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
   .chip.example{color:var(--muted);background:var(--surface-2)}
   .code{font-family:var(--mono);font-size:13px;color:var(--muted)}
   .card h2{font-size:15px;font-weight:700;margin:8px 0 2px}
@@ -148,6 +150,16 @@
 
   .foot{margin-top:26px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
   .foot b{color:var(--ink);font-weight:600}
+
+  .modal{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45)}
+  .modal .sheet{background:var(--surface);width:100%;max-width:560px;border-radius:18px 18px 0 0;border:1px solid var(--line);box-shadow:var(--shadow);padding:20px 18px calc(20px + var(--safe-b));position:relative}
+  @media(min-width:560px){ .modal{align-items:center} .modal .sheet{border-radius:18px} }
+  .modal .x{position:absolute;top:12px;right:12px;appearance:none;border:0;background:var(--surface-2);color:var(--ink);width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;line-height:1}
+  .modal h3{margin:2px 40px 4px 0;font-size:17px}
+  .modal .sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.4}
+  .choices{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .choices button{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-family:var(--ui);font-weight:600;font-size:15px;padding:15px 10px;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+  .choices button:active{transform:translateY(1px);background:var(--surface-2)}
 </style>
 </head>
 <body>
@@ -158,7 +170,7 @@
     <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
   </header>
 
-  <p class="tagline"><b>Point, lock on, price it.</b> Live-scan a barcode and jump straight to matching <b>eBay.com.au sold listings</b> — where you're already signed in.</p>
+  <p class="tagline"><b>Point, lock on, price it.</b> Live-scan a barcode — ShelfScout works out what it is, then jumps you to matching <b>eBay.com.au sold listings</b>, where you're already signed in.</p>
 
   <div class="seg" role="group" aria-label="Item type">
     <button id="mBook" aria-pressed="true"><span class="em">📚</span> Books</button>
@@ -212,6 +224,22 @@
     </div>
   </section>
 
+  <div id="modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <button class="x" id="modalClose" aria-label="Close">×</button>
+      <h3 id="modalTitle">What did you scan?</h3>
+      <p id="modalSub" class="sub"></p>
+      <div class="choices" id="modalBtns">
+        <button data-type="book">📚 Book</button>
+        <button data-type="dvd">📀 DVD</button>
+        <button data-type="bluray">💿 Blu-ray</button>
+        <button data-type="game">🎮 Video game</button>
+        <button data-type="music">🎵 CD / Music</button>
+        <button data-type="other">🏷️ Other</button>
+      </div>
+    </div>
+  </div>
+
   <section class="haul">
     <div class="head">
       <h3>Today's haul</h3><span class="count" id="haulCount">0 items</span>
@@ -222,7 +250,9 @@
   </section>
 
   <p class="foot">
-    <b>Pricing:</b> books and discs have no clean price API, so ShelfScout hands you to real <b>eBay.com.au sold listings</b> — the honest read on what things fetch here. For discs, the barcode rarely appears in listings, so swap the number for the <b>title on the case</b> before searching.
+    <b>Auto-detect:</b> ISBNs are read instantly; other barcodes get a quick title lookup and ShelfScout guesses the format. When it's unsure, it asks. If a guess is off, the <b>Books / DVD</b> toggle or the search box lets you correct it before searching.
+    <br><br>
+    <b>Pricing:</b> books and discs have no clean price API, so ShelfScout hands you to real <b>eBay.com.au sold listings</b> — the honest read on what things fetch here. Lookups are cached and rate-limited, so if titles stop filling in for a while, just type the title and keep going.
   </p>
 </div>
 
@@ -250,7 +280,10 @@
   }
 
   // ---------- state ----------
-  var mode='book', CAT={book:'267',disc:'617'}, isExample=true, currentCode=null;
+  var CAT={book:'267', dvd:'617', bluray:'617', game:'139973', music:'11233', other:''};
+  var LABEL={book:'Book', dvd:'DVD', bluray:'Blu-ray', game:'Video game', music:'CD / Music', other:'Item'};
+  var CHIP={book:'book', dvd:'disc', bluray:'disc', game:'game', music:'music', other:''};
+  var isExample=true, currentCode=null, currentType='book';
   var mBook=document.getElementById('mBook'), mDisc=document.getElementById('mDisc');
   var rChip=document.getElementById('rChip'), rExample=document.getElementById('rExample'),
       rCode=document.getElementById('rCode'), rTitle=document.getElementById('rTitle'),
@@ -258,16 +291,18 @@
       btnSold=document.getElementById('btnSold'), btnActive=document.getElementById('btnActive'),
       btnAdd=document.getElementById('btnAdd');
 
-  function setMode(m){
-    mode=m; mBook.setAttribute('aria-pressed',m==='book'); mDisc.setAttribute('aria-pressed',m==='disc');
-    if(!isExample && currentCode) buildLinks();
-  }
-  mBook.addEventListener('click',function(){ setMode('book'); });
-  mDisc.addEventListener('click',function(){ setMode('disc'); });
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function isbnPrefix(c){ return /^97[89]/.test(c); }
+  function syncToggle(type){ mBook.setAttribute('aria-pressed', type==='book'); mDisc.setAttribute('aria-pressed', type!=='book'); }
+  function setTypeChip(type){ rChip.textContent=LABEL[type]||'Item'; rChip.className='chip '+(CHIP[type]||''); }
+
+  mBook.addEventListener('click',function(){ if(isExample) return; currentType='book'; syncToggle('book'); setTypeChip('book'); buildLinks(); });
+  mDisc.addEventListener('click',function(){ if(isExample) return; currentType='dvd'; syncToggle('dvd'); setTypeChip('dvd'); buildLinks(); });
 
   // ---------- eBay links ----------
   function ebayUrl(q,sold){
-    var u='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(q||'')+'&_sacat='+CAT[mode];
+    var u='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(q||'');
+    var c=CAT[currentType]; if(c) u+='&_sacat='+c;
     if(sold) u+='&LH_Sold=1&LH_Complete=1';
     return u;
   }
@@ -277,7 +312,6 @@
   }
   terms.addEventListener('input',buildLinks);
 
-  function isbnPrefix(c){ return /^97[89]/.test(c); }
   function addQuick(label,val,replace){
     var b=document.createElement('button'); b.textContent=label;
     b.addEventListener('click',function(){
@@ -286,24 +320,120 @@
     });
     quick.appendChild(b);
   }
-  function showItem(code){
+
+  // ---------- identify (online lookup) ----------
+  var cache={}; try{ cache=JSON.parse(localStorage.getItem('ss_cache')||'{}')||{}; }catch(e){}
+  function cachePut(code,val){ cache[code]=val; try{ localStorage.setItem('ss_cache',JSON.stringify(cache)); }catch(e){} }
+  function cleanTitle(t){ return String(t||'').replace(/\s+/g,' ').trim(); }
+
+  function inferFormat(text){
+    var t=' '+String(text||'').toLowerCase()+' ';
+    if(/blu[\s\-]?ray|\b4k\b|uhd/.test(t)) return 'bluray';
+    if(/\bdvd\b/.test(t)) return 'dvd';
+    if(/playstation|\bps[1-5]\b|\bpsp\b|vita|xbox|nintendo|\bswitch\b|\bwii\b|gamecube|game\s?boy|\b3ds\b|\bnds\b|sega|mega\s?drive|\bn64\b/.test(t)) return 'game';
+    if(/audio cd|\bcd\b|compact disc|vinyl|\blp\b/.test(t)) return 'music';
+    return null;
+  }
+
+  async function lookupBook(isbn){
+    var r=await fetch('https://www.googleapis.com/books/v1/volumes?q=isbn:'+encodeURIComponent(isbn));
+    if(!r.ok) throw new Error('http'); var j=await r.json();
+    if(j.totalItems>0 && j.items && j.items[0]){
+      var v=j.items[0].volumeInfo||{};
+      return {title:v.title||'', authors:(v.authors||[]).join(', '), year:(v.publishedDate||'').slice(0,4)};
+    }
+    return null;
+  }
+  async function lookupUPC(upc){
+    var r=await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc='+encodeURIComponent(upc));
+    if(r.status===429) throw {rate:true};
+    if(!r.ok) throw new Error('http'); var j=await r.json();
+    if(j.items && j.items[0]){ var it=j.items[0]; return {title:it.title||'', brand:it.brand||'', category:it.category||''}; }
+    return null;
+  }
+
+  async function identify(code){
     isExample=false; currentCode=code; rExample.hidden=true;
-    if(isbnPrefix(code)) setMode('book');
-    rChip.textContent=mode==='book'?'Book':'DVD / Blu-ray';
-    rChip.className='chip '+(mode==='book'?'book':'disc');
-    rCode.textContent=code;
-    rTitle.textContent=mode==='book'?'ISBN scanned':'Barcode scanned';
-    if(mode==='book'){ terms.value=code; }
-    else { terms.value=''; terms.setAttribute('placeholder','Type the title on the case (e.g. Alien Blu-ray)'); }
+    rCode.textContent=code; rTitle.textContent='Identifying…'; quick.innerHTML=''; terms.value='';
+    setTypeChip(isbnPrefix(code)?'book':'dvd'); syncToggle(isbnPrefix(code)?'book':'dvd');
+    beep(); vibrate();
+    document.getElementById('result').scrollIntoView({behavior:'smooth',block:'center'});
+    setStatus('Identifying <b>'+esc(code)+'</b>…','info');
+
+    var info=cache[code]||null, err=null;
+    if(!info){
+      try{
+        if(isbnPrefix(code)){ var b=await lookupBook(code); info=b?{kind:'book',data:b}:null; }
+        else { var u=await lookupUPC(code); info=u?{kind:'upc',data:u}:null; }
+        if(info) cachePut(code,info);
+      }catch(e){ err=e; }
+    }
+    if(currentCode!==code) return; // a newer scan superseded this one
+    applyIdentity(code,info,err);
+  }
+
+  function applyIdentity(code,info,err){
+    var title='', type=null;
+    if(isbnPrefix(code)){
+      type='book';
+      if(info && info.data) title=[info.data.title, info.data.authors].filter(Boolean).join(' — ');
+      finalize(code,type,title,info); return;
+    }
+    if(info && info.data){
+      title=cleanTitle(info.data.title);
+      type=inferFormat(title+' '+(info.data.category||''));
+      if(type){ finalize(code,type,title,info); return; }
+    }
+    openChooser(code,title,info,err); // torn or unknown → ask
+  }
+
+  function finalize(code,type,title,info){
+    currentType=type; setTypeChip(type); syncToggle(type);
+    rTitle.textContent = title || (type==='book'?'ISBN scanned':'Barcode scanned');
+    var t='';
+    if(type==='book'){
+      t = (info&&info.data)? cleanTitle([info.data.title,info.data.authors].filter(Boolean).join(' ')) : '';
+      terms.value = t || code;
+    } else {
+      t = title || '';
+      if(type==='bluray' && t && !/blu/i.test(t)) t+=' Blu-ray';
+      else if(type==='dvd' && t && !/dvd/i.test(t)) t+=' DVD';
+      terms.value = t;
+      if(!t) terms.setAttribute('placeholder','Type the title on the case');
+    }
     quick.innerHTML='';
     addQuick('Use barcode',code,true);
-    if(mode==='book'){ addQuick('+ book',code+' book',true); }
-    else { addQuick('+ Blu-ray','Blu-ray',false); addQuick('+ DVD','DVD',false); }
+    if(type==='book') addQuick('ISBN',code,true);
+    if(type==='dvd'||type==='bluray'){ addQuick('+ Blu-ray','Blu-ray',false); addQuick('+ DVD','DVD',false); }
     buildLinks();
-    beep(); vibrate();
-    setStatus('Locked on: <b>'+code+'</b>. Edit the terms if needed, then tap <b>AU sold</b>.','good');
-    document.getElementById('result').scrollIntoView({behavior:'smooth',block:'center'});
+    var msg = title ? ('Looks like a '+LABEL[type].toLowerCase()+': <b>'+esc(title)+'</b>') : ('Detected: '+LABEL[type]+' — edit terms, then tap <b>AU sold</b>');
+    setStatus(msg,'good');
   }
+
+  // ---------- chooser popup ----------
+  var modal=document.getElementById('modal'), modalTitle=document.getElementById('modalTitle'),
+      modalSub=document.getElementById('modalSub'), modalBtns=document.getElementById('modalBtns'),
+      modalClose=document.getElementById('modalClose');
+  var pending=null;
+  function openChooser(code,title,info,err){
+    pending={code:code,title:title,info:info};
+    if(err && err.rate){ modalSub.textContent='Lookup limit reached for now — pick the type and I’ll search eBay.'; }
+    else if(title){ modalSub.textContent='Found: “'+title+'”'; }
+    else { modalSub.textContent='Couldn’t auto-identify barcode '+code+'.'; }
+    modalTitle.textContent = title ? 'What kind of item is this?' : 'What did you scan?';
+    modal.hidden=false;
+    setStatus(title? ('Not sure of the format for <b>'+esc(title)+'</b> — pick below.') : ('Couldn’t identify '+esc(code)+' — pick a type.'),'warn');
+  }
+  function chooseType(type){
+    var p=pending; modal.hidden=true; pending=null;
+    if(!p) return;
+    finalize(p.code, type, p.title, p.info);
+    if(!terms.value.trim()) terms.focus();
+  }
+  Array.prototype.forEach.call(modalBtns.querySelectorAll('button[data-type]'),function(b){
+    b.addEventListener('click',function(){ chooseType(b.getAttribute('data-type')); });
+  });
+  modalClose.addEventListener('click',function(){ chooseType('other'); });
 
   // ---------- feedback ----------
   function vibrate(){ try{ if(navigator.vibrate) navigator.vibrate(45); }catch(e){} }
@@ -324,7 +454,7 @@
   var manualInput=document.getElementById('manualInput'), manualGo=document.getElementById('manualGo');
   function doManual(){
     var v=(manualInput.value||'').replace(/[^0-9Xx]/g,'').trim();
-    if(v.length>=8){ showItem(v); manualInput.value=''; } else { manualInput.focus(); }
+    if(v.length>=8){ identify(v); manualInput.value=''; } else { manualInput.focus(); }
   }
   manualGo.addEventListener('click',doManual);
   manualInput.addEventListener('keydown',function(e){ if(e.key==='Enter') doManual(); });
@@ -455,7 +585,7 @@
   function onHit(code){
     if(gotOne) return; gotOne=true;
     stopScan();     // auto-close the scanner on a successful read
-    showItem(code);
+    identify(code);
   }
 
   function setupTorch(){
@@ -520,7 +650,7 @@
     var r;
     try{ r=new Z.BrowserMultiFormatReader(zxHints()); }catch(e){ r=new Z.BrowserMultiFormatReader(); }
     r.decodeFromImageUrl(url).then(function(result){
-      setStatus(''); showItem(result.getText()); URL.revokeObjectURL(url);
+      setStatus(''); identify(result.getText()); URL.revokeObjectURL(url);
     }).catch(function(){
       setStatus('Couldn’t read that photo. Live scanning is far more reliable — tap <b>Start scanning</b> — or type the number below.','warn');
       URL.revokeObjectURL(url);
@@ -537,14 +667,15 @@
     haulCount.textContent=haul.length+(haul.length===1?' item':' items');
     haulEmpty.hidden=haul.length>0; haulClear.hidden=haul.length===0;
     haul.forEach(function(it,i){
+      var ty=it.type || (it.mode==='disc'?'dvd':it.mode) || 'book';
       var li=document.createElement('li');
-      var dot=document.createElement('span'); dot.className='dot '+it.mode; li.appendChild(dot);
+      var dot=document.createElement('span'); dot.className='dot '+(ty==='book'?'book':'disc'); li.appendChild(dot);
       var meta=document.createElement('div'); meta.className='meta';
       var t=document.createElement('div'); t.className='t'; t.textContent=it.terms||it.code;
-      var c=document.createElement('div'); c.className='c'; c.textContent=(it.mode==='book'?'Book · ':'Disc · ')+it.code;
+      var c=document.createElement('div'); c.className='c'; c.textContent=(LABEL[ty]||'Item')+' · '+it.code;
       meta.appendChild(t); meta.appendChild(c); li.appendChild(meta);
       var go=document.createElement('a'); go.className='go'; go.textContent='Sold ›'; go.target='_blank'; go.rel='noopener';
-      go.href='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(it.terms||it.code)+'&_sacat='+(CAT[it.mode]||'')+'&LH_Sold=1&LH_Complete=1';
+      go.href='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(it.terms||it.code)+(CAT[ty]?'&_sacat='+CAT[ty]:'')+'&LH_Sold=1&LH_Complete=1';
       li.appendChild(go);
       var del=document.createElement('button'); del.className='del'; del.setAttribute('aria-label','Remove'); del.textContent='×';
       del.addEventListener('click',function(){ haul.splice(i,1); saveHaul(); renderHaul(); });
@@ -553,7 +684,7 @@
   }
   btnAdd.addEventListener('click',function(){
     if(isExample||!currentCode) return;
-    haul.unshift({code:currentCode,terms:terms.value.trim()||currentCode,mode:mode,ts:Date.now()});
+    haul.unshift({code:currentCode,terms:terms.value.trim()||currentCode,type:currentType,ts:Date.now()});
     saveHaul(); renderHaul();
     btnAdd.textContent='✓ Added'; setTimeout(function(){ btnAdd.textContent='＋ Add to haul'; },1100);
   });
