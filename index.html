@@ -304,6 +304,7 @@
     var u='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(q||'');
     var c=CAT[currentType]; if(c) u+='&_sacat='+c;
     if(sold) u+='&LH_Sold=1&LH_Complete=1';
+    u+='&LH_PrefLoc=1'; // Item location: Australia only
     return u;
   }
   function buildLinks(){
@@ -675,7 +676,7 @@
       var c=document.createElement('div'); c.className='c'; c.textContent=(LABEL[ty]||'Item')+' · '+it.code;
       meta.appendChild(t); meta.appendChild(c); li.appendChild(meta);
       var go=document.createElement('a'); go.className='go'; go.textContent='Sold ›'; go.target='_blank'; go.rel='noopener';
-      go.href='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(it.terms||it.code)+(CAT[ty]?'&_sacat='+CAT[ty]:'')+'&LH_Sold=1&LH_Complete=1';
+      go.href='https://www.ebay.com.au/sch/i.html?_nkw='+encodeURIComponent(it.terms||it.code)+(CAT[ty]?'&_sacat='+CAT[ty]:'')+'&LH_Sold=1&LH_Complete=1&LH_PrefLoc=1';
       li.appendChild(go);
       var del=document.createElement('button'); del.className='del'; del.setAttribute('aria-label','Remove'); del.textContent='×';
       del.addEventListener('click',function(){ haul.splice(i,1); saveHaul(); renderHaul(); });
